@@ -1,95 +1,72 @@
 import os
-import uuid
-import time
+import asyncio
 from threading import Thread
-from flask import Flask, redirect, abort
+from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- 1. Flask App Setup ---
+# --- 1. Flask Web Server (Required for Render) ---
 app = Flask(__name__)
-
-# In-memory store for links (Note: Cleared on app restart)
-# Format: { unique_id: {"destination": str, "expires_at": float} }
-link_db = {}
-
-# Set how long links should last (in seconds). Example: 300 seconds = 5 minutes
-LINK_LIFETIME = 300 
 
 @app.route('/')
 def home():
-    return "Bot and Link Expire Service are running!"
-
-@app.route('/l/<link_id>')
-def handle_redirect(link_id):
-    """Handles short links and checks if they are expired."""
-    data = link_db.get(link_id)
-    
-    if not data:
-        return "Link not found or has already expired.", 404
-        
-    # Check if link expired
-    if time.time() > data["expires_at"]:
-        del link_db[link_id]  # Clean up expired link
-        return "This link has expired!", 410
-
-    # Redirect user to the original target URL
-    return redirect(data["destination"])
+    return "Bot is running!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# --- 2. Telegram Bot Handlers ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Welcome! Send /gen <URL> to create a temporary link that expires in 5 minutes."
-    )
+# --- 2. Auto-Delete Channel Link Logic ---
 
-async def generate_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Set your target Channel ID (e.g., -1001234567890 or "@YourChannelUsername")
+CHANNEL_ID = os.environ.get("CHANNEL_ID")
+
+async def post_expiring_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Usage in Bot DM: /postlink https://example.com 5
+    (where 5 is the expiration time in minutes)
+    """
     if not context.args:
-        await update.message.reply_text("Usage: /gen https://example.com")
+        await update.message.reply_text("Usage: /postlink <URL> [minutes]\nExample: /postlink https://google.com 5")
         return
 
-    original_url = context.args[0]
-    if not original_url.startswith(("http://", "https://")):
-        await update.message.reply_text("Please provide a valid URL starting with http:// or https://")
-        return
+    url = context.args[0]
+    # Default to 2 minutes if time is not specified
+    expire_minutes = int(context.args[1]) if len(context.args) > 1 else 2
+    delay_seconds = expire_minutes * 60
 
-    # Generate a unique ID for the link
-    link_id = str(uuid.uuid4())[:8]
-    expires_at = time.time() + LINK_LIFETIME
-    
-    # Store in memory
-    link_db[link_id] = {
-        "destination": original_url,
-        "expires_at": expires_at
-    }
+    try:
+        # 1. Post the link to the channel
+        sent_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=f"🔗 **Temporary Link** (Self-destructs in {expire_minutes} mins):\n\n{url}",
+            parse_mode="Markdown"
+        )
+        
+        await update.message.reply_text(f"Link posted to channel! It will be deleted in {expire_minutes} minute(s).")
 
-    # Build the short link using your Render app's domain
-    # Example: https://your-app-name.onrender.com/l/abc1234
-    render_domain = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:10000")
-    expiring_url = f"{render_domain}/l/{link_id}"
+        # 2. Wait in background for specified time
+        await asyncio.sleep(delay_seconds)
 
-    await update.message.reply_text(
-        f"Here is your temporary link (expires in 5 minutes):\n\n{expiring_url}"
-    )
+        # 3. Automatically delete the channel post
+        await context.bot.delete_message(
+            chat_id=CHANNEL_ID,
+            message_id=sent_message.message_id
+        )
 
-# --- 3. Start Bot and Flask Thread ---
+    except Exception as e:
+        print(f"Error handling post: {e}")
+
+# --- 3. Bot Initialization ---
 if __name__ == "__main__":
-    # Start Flask HTTP server in background thread for Render compatibility
+    # Start Flask server
     Thread(target=run_flask).start()
 
-    # Get your bot token from environment variables
     BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
     
-    if not BOT_TOKEN:
-        print("Error: TELEGRAM_BOT_TOKEN environment variable missing!")
-    else:
-        bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
-        bot_app.add_handler(CommandHandler("start", start))
-        bot_app.add_handler(CommandHandler("gen", generate_link))
-        
-        print("Bot is starting...")
-        bot_app.run_polling()
-      
+    bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
+    bot_app.add_handler(CommandHandler("postlink", post_expiring_link))
+
+    print("Jeichotom Mara✓")
+    bot_app.run_polling()
+    
