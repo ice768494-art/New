@@ -69,4 +69,44 @@ if __name__ == "__main__":
 
     print("Jeichotom Mara✓")
     bot_app.run_polling()
+
+import os
+import asyncio
+from threading import Thread
+from flask import Flask
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.request import HTTPXRequest  # <--- Import HTTPXRequest
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+# Configure longer timeouts (15 seconds for connect and read)
+request = HTTPXRequest(connect_timeout=15.0, read_timeout=15.0)
+
+if __name__ == "__main__":
+    Thread(target=run_flask).start()
+
+    BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+    
+    # Pass custom request configuration to the bot builder
+    bot_app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .request(request)
+        .build()
+    )
+    
+    # Add your handlers here...
+    
+    print("Bot starting with custom timeouts...")
+    bot_app.run_polling()
+    
     
